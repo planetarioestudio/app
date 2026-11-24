@@ -133,7 +133,7 @@ function TemplateEditor({ data }: { data: AdminData }) {
   }
   return (
     <Section
-      title="Modelo da anamnese"
+      title="Anamnese atual"
       action={
         <Button
           variant="secondary"
@@ -142,15 +142,19 @@ function TemplateEditor({ data }: { data: AdminData }) {
             setOpen(!open);
           }}
         >
-          {open ? "Fechar" : latest ? "Criar nova versão" : "Criar modelo"}
+          {open
+            ? "Fechar"
+            : latest
+              ? "Editar anamnese atual"
+              : "Criar anamnese"}
         </Button>
       }
     >
       {latest ? (
         <p>
-          Versão publicada: <strong>{latest.version}</strong> ·{" "}
-          {latest.questions.length} perguntas. Versões enviadas permanecem
-          intactas.
+          <strong>{latest.questions.length} perguntas</strong> · última
+          atualização em {dateTimeBR(latest.publishedAt)}. Abra o editor para
+          alterar as perguntas e os termos atuais.
         </p>
       ) : (
         <Empty>
@@ -161,7 +165,7 @@ function TemplateEditor({ data }: { data: AdminData }) {
       {open && (
         <form onSubmit={save} className="form-grid">
           {versions.length > 0 && (
-            <Field label="Editar a partir do modelo publicado">
+            <Field label="Usar perguntas e termos de uma edição anterior (opcional)">
               <select
                 value={sourceId}
                 onChange={(e) =>
@@ -180,9 +184,8 @@ function TemplateEditor({ data }: { data: AdminData }) {
           )}
           {versions.length > 0 && (
             <p className="full request-meta">
-              As alterações serão publicadas como versão{" "}
-              {(latest?.version || 0) + 1}. As fichas já assinadas permanecem
-              vinculadas ao modelo original.
+              Ao salvar, esta será a anamnese atual para novos links. Fichas já
+              assinadas e links enviados continuam com o texto original.
             </p>
           )}
           <div className="full">
@@ -365,7 +368,7 @@ function TemplateEditor({ data }: { data: AdminData }) {
           {error && <p className="notice error">{error}</p>}
           <FormActions
             busy={busy}
-            label="Publicar versão"
+            label="Salvar alterações"
             cancel={() => setOpen(false)}
           />
         </form>
