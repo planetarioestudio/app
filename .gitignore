@@ -1,0 +1,14 @@
+node_modules/
+dist/
+.env
+.env.*.local
+.firebase/
+firebase-debug.log
+firestore-debug.log
+*.log
+coverage/
+.DS_Store
+credentials/
+backups/
+firebase-admin-key.json
+.tools/

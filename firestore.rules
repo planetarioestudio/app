@@ -1,0 +1,156 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function googleUser() {
+      return request.auth != null
+        && request.auth.token.email_verified == true
+        && request.auth.token.firebase.sign_in_provider == 'google.com';
+    }
+    function bootstrapAccount() {
+      return googleUser() && request.auth.token.email == 'planetariomkt@gmail.com';
+    }
+    function ownerPath() {
+      return /databases/$(database)/documents/settings/owner;
+    }
+    function owner() {
+      return googleUser() && exists(ownerPath()) && get(ownerPath()).data.uid == request.auth.uid;
+    }
+    function accessPath() {
+      return /databases/$(database)/documents/clientAccess/$(request.auth.uid);
+    }
+    function linked() {
+      return googleUser() && exists(accessPath())
+        && get(accessPath()).data.active == true
+        && get(accessPath()).data.verifiedGoogleEmail == request.auth.token.email;
+    }
+    function linkedTo(clientId) {
+      return linked() && get(accessPath()).data.clientId == clientId;
+    }
+    function requestPath(id) {
+      return /databases/$(database)/documents/anamneseRequests/$(id);
+    }
+    function ownRequest(id) {
+      return linked() && exists(requestPath(id))
+        && get(requestPath(id)).data.assignedUid == request.auth.uid
+        && linkedTo(get(requestPath(id)).data.clientId);
+    }
+
+    match /settings/owner {
+      allow get: if bootstrapAccount() || owner();
+      allow create: if bootstrapAccount()
+        && !exists(ownerPath())
+        && request.resource.data.keys().hasOnly(['uid', 'email', 'createdAt'])
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.email == request.auth.token.email
+        && request.resource.data.createdAt == request.time;
+      allow list, update, delete: if false;
+    }
+    match /settings/app { allow read, write: if owner(); }
+
+    match /clients/{id} { allow read, write: if owner(); }
+    match /projects/{id} { allow read, write: if owner(); }
+    match /sessions/{id} { allow read, write: if owner(); }
+    match /quotes/{id} {
+      allow read, create: if owner();
+      allow update: if owner() && (
+        resource.data.status == 'rascunho'
+        || request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'sentAt', 'decidedAt', 'updatedAt'])
+      );
+      allow delete: if false;
+    }
+    match /payments/{id} { allow read, write: if owner(); }
+    match /expenses/{id} { allow read, write: if owner(); }
+    match /products/{id} { allow read, write: if owner(); }
+    match /stockLots/{id} { allow read, write: if owner(); }
+    match /stockMovements/{id} { allow read, write: if owner(); }
+
+    match /pendingAccounts/{uid} {
+      allow read: if owner() || (googleUser() && request.auth.uid == uid);
+      allow create: if googleUser() && request.auth.uid == uid
+        && request.resource.data.keys().hasOnly(['uid', 'verifiedGoogleEmail', 'requestedAt'])
+        && request.resource.data.uid == uid
+        && request.resource.data.verifiedGoogleEmail == request.auth.token.email
+        && request.resource.data.requestedAt == request.time;
+      allow update, delete: if owner();
+    }
+    match /clientAccess/{uid} {
+      allow get: if owner() || (googleUser() && request.auth.uid == uid);
+      allow list: if owner();
+      allow create, update, delete: if owner();
+    }
+    match /formTemplates/{id} {
+      allow get: if owner() || linked();
+      allow list: if owner();
+      allow create: if owner()
+        && request.resource.data.questions is list
+        && request.resource.data.questions.size() > 0
+        && request.resource.data.questions.size() <= 40
+        && request.resource.data.questionIds is list
+        && request.resource.data.requiredQuestionIds is list
+        && request.resource.data.questionIds.size() == request.resource.data.questions.size()
+        && request.resource.data.requiredQuestionIds.size() <= request.resource.data.questionIds.size()
+        && request.resource.data.procedureTerm is string
+        && request.resource.data.procedureTerm.size() <= 30000
+        && request.resource.data.imageConsentTerm is string;
+      allow update, delete: if false;
+    }
+    match /anamneseRequests/{id} {
+      allow get: if owner() || (linked()
+        && resource.data.assignedUid == request.auth.uid
+        && linkedTo(resource.data.clientId));
+      allow list: if owner();
+      allow create: if owner()
+        && request.resource.data.expiresAt is timestamp
+        && request.resource.data.expiresAt > request.time;
+      allow update: if owner()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt'])
+        && request.resource.data.status == 'revogada';
+      allow delete: if false;
+    }
+    match /anamneseSubmissions/{id} {
+      allow get: if owner() || ownRequest(id);
+      allow list: if owner();
+      allow create: if ownRequest(id)
+        && !exists(/databases/$(database)/documents/anamneseSubmissions/$(id))
+        && request.resource.data.keys().hasOnly([
+          'clientId', 'projectId', 'requestId', 'googleUid', 'googleEmail',
+          'templateId', 'version', 'answers', 'procedureAccepted',
+          'imageUseAccepted', 'signedAt', 'authMethod', 'authTimeSeconds'
+        ])
+        && request.resource.data.keys().hasAll([
+          'clientId', 'projectId', 'requestId', 'googleUid', 'googleEmail',
+          'templateId', 'version', 'answers', 'procedureAccepted',
+          'imageUseAccepted', 'signedAt', 'authMethod', 'authTimeSeconds'
+        ])
+        && request.resource.data.requestId == id
+        && request.resource.data.googleUid == request.auth.uid
+        && request.resource.data.googleEmail == request.auth.token.email
+        && request.resource.data.clientId == get(requestPath(id)).data.clientId
+        && request.resource.data.projectId == get(requestPath(id)).data.projectId
+        && request.resource.data.templateId == get(requestPath(id)).data.templateId
+        && request.resource.data.version == get(/databases/$(database)/documents/formTemplates/$(request.resource.data.templateId)).data.version
+        && get(requestPath(id)).data.status == 'enviada'
+        && get(requestPath(id)).data.expiresAt > request.time
+        && request.resource.data.answers is map
+        && request.resource.data.answers.keys().size() <= 40
+        && request.resource.data.answers.keys().hasOnly(get(/databases/$(database)/documents/formTemplates/$(request.resource.data.templateId)).data.questionIds)
+        && request.resource.data.answers.keys().hasAll(get(/databases/$(database)/documents/formTemplates/$(request.resource.data.templateId)).data.requiredQuestionIds)
+        && request.resource.data.procedureAccepted == true
+        && request.resource.data.imageUseAccepted is bool
+        && request.resource.data.authMethod == 'google.com'
+        && request.resource.data.authTimeSeconds == request.auth.token.auth_time
+        && request.resource.data.signedAt == request.time
+        && request.auth.token.auth_time * 1000 >= request.time.toMillis() - 300000;
+      allow update, delete: if false;
+    }
+    match /anamneseReviews/{id} {
+      allow read: if owner();
+      allow create: if owner()
+        && exists(/databases/$(database)/documents/anamneseSubmissions/$(id))
+        && request.resource.data.reviewerUid == request.auth.uid
+        && request.resource.data.reviewedAt == request.time;
+      allow update, delete: if false;
+    }
+    match /{document=**} { allow read, write: if false; }
+  }
+}
