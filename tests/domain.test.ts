@@ -2,12 +2,14 @@ import { describe, expect, it } from "vitest";
 import {
   expiringLots,
   lotExpired,
+  missingRequiredAnswer,
   nextQuoteVersion,
   projectPaid,
   stockResult,
   suggestedPrice,
+  visibleAnswers,
 } from "../src/lib/domain";
-import type { Payment, Quote, StockLot } from "../src/lib/types";
+import type { FormQuestion, Payment, Quote, StockLot } from "../src/lib/types";
 
 describe("valores gerenciais", () => {
   it("calcula preço sugerido em centavos", () => {
@@ -49,5 +51,37 @@ describe("valores gerenciais", () => {
     expect(() => stockResult(10, 1, -2)).toThrow("Saldo insuficiente");
     expect(lotExpired("2026-11-23", "2026-11-24")).toBe(true);
     expect(lotExpired("2026-11-24", "2026-11-24")).toBe(false);
+  });
+});
+
+describe("anamnese condicional", () => {
+  const questions: FormQuestion[] = [
+    {
+      id: "saude",
+      label: "Possui alergia?",
+      type: "yesno",
+      required: true,
+      followUp: {
+        id: "detalhes",
+        label: "Qual alergia?",
+        type: "text",
+        required: true,
+        when: "Sim",
+      },
+    },
+  ];
+  it("exige a subresposta só quando a condição se aplica", () => {
+    expect(missingRequiredAnswer(questions, { saude: "Sim" })).toBe(true);
+    expect(
+      missingRequiredAnswer(questions, { saude: "Sim", detalhes: "Látex" }),
+    ).toBe(false);
+    expect(missingRequiredAnswer(questions, { saude: "Não" })).toBe(false);
+  });
+  it("retira respostas ocultas antes de assinar", () => {
+    expect(
+      visibleAnswers(questions, { saude: "Não", detalhes: "Látex" }),
+    ).toEqual({
+      saude: "Não",
+    });
   });
 });

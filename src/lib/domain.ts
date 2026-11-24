@@ -1,4 +1,33 @@
-import type { Payment, Quote, StockLot } from "./types";
+import type { FormQuestion, Payment, Quote, StockLot } from "./types";
+
+export function visibleAnswers(
+  questions: FormQuestion[],
+  answers: Record<string, string>,
+) {
+  const result: Record<string, string> = {};
+  for (const question of questions) {
+    const answer = answers[question.id]?.trim();
+    if (answer) result[question.id] = answer;
+    if (question.followUp && answer === question.followUp.when) {
+      const followUpAnswer = answers[question.followUp.id]?.trim();
+      if (followUpAnswer) result[question.followUp.id] = followUpAnswer;
+    }
+  }
+  return result;
+}
+
+export function missingRequiredAnswer(
+  questions: FormQuestion[],
+  answers: Record<string, string>,
+) {
+  return questions.some(
+    (question) =>
+      (question.required && !answers[question.id]?.trim()) ||
+      (question.followUp?.required &&
+        answers[question.id] === question.followUp.when &&
+        !answers[question.followUp.id]?.trim()),
+  );
+}
 
 export function suggestedPrice(
   hours: number,

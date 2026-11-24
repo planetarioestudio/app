@@ -87,7 +87,8 @@ service cloud.firestore {
         && request.resource.data.questions.size() <= 40
         && request.resource.data.questionIds is list
         && request.resource.data.requiredQuestionIds is list
-        && request.resource.data.questionIds.size() == request.resource.data.questions.size()
+        && request.resource.data.questionIds.size() >= request.resource.data.questions.size()
+        && request.resource.data.questionIds.size() <= 40
         && request.resource.data.requiredQuestionIds.size() <= request.resource.data.questionIds.size()
         && request.resource.data.procedureTerm is string
         && request.resource.data.procedureTerm.size() <= 30000

@@ -175,6 +175,41 @@ describe("isolamento do estúdio e anamnese", () => {
     );
     expect(submission.exists()).toBe(true);
   });
+  it("aceita um modelo com subresposta e mantém versões publicadas imutáveis", async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), "settings", "owner"), {
+        uid: "owner-uid",
+        email: "planetariomkt@gmail.com",
+      });
+    });
+    const db = env.authenticatedContext("owner-uid", ownerToken).firestore();
+    const ref = doc(db, "formTemplates", "condicional");
+    const model = {
+      version: 2,
+      questions: [
+        {
+          id: "q1",
+          label: "Possui alergia?",
+          type: "yesno",
+          required: true,
+          followUp: {
+            id: "q2",
+            label: "Qual alergia?",
+            type: "text",
+            required: true,
+            when: "Sim",
+          },
+        },
+      ],
+      questionIds: ["q1", "q2"],
+      requiredQuestionIds: ["q1"],
+      procedureTerm: "Termo",
+      imageConsentTerm: "Imagem",
+      publishedAt: serverTimestamp(),
+    };
+    await assertSucceeds(setDoc(ref, model));
+    await assertFails(setDoc(ref, { ...model, procedureTerm: "Alterado" }));
+  });
   it("nega leitura depois de revogar o vínculo", async () => {
     await env.withSecurityRulesDisabled(async (ctx) => {
       const db = ctx.firestore();

@@ -175,7 +175,9 @@ export async function publishTemplate(
 ) {
   return createRecord("formTemplates", {
     ...data,
-    questionIds: data.questions.map((q) => q.id),
+    questionIds: data.questions.flatMap((q) =>
+      q.followUp ? [q.id, q.followUp.id] : [q.id],
+    ),
     requiredQuestionIds: data.questions
       .filter((q) => q.required)
       .map((q) => q.id),

@@ -114,11 +114,14 @@ export type ClientAccess = RecordBase & {
   linkedAt?: unknown;
   linkedBy: string;
 };
-export type FormQuestion = {
+export type FollowUpQuestion = {
   id: string;
   label: string;
   required: boolean;
   type: "text" | "yesno";
+};
+export type FormQuestion = FollowUpQuestion & {
+  followUp?: FollowUpQuestion & { when: "Sim" | "Não" };
 };
 export type FormTemplate = RecordBase & {
   version: number;

@@ -430,6 +430,7 @@ strong {
 .form-grid > .notice,
 .form-grid > .form-actions,
 .form-grid > .full,
+.question-editor > .full,
 .form-grid > .check-row {
   grid-column: 1/-1;
 }
@@ -582,6 +583,9 @@ strong {
   border-bottom: 1px solid var(--line);
   padding-bottom: 14px;
   margin-bottom: 12px;
+}
+.request-card .list-row {
+  border-bottom: 0;
 }
 .request-card:last-child {
   border: 0;
@@ -772,6 +776,13 @@ strong {
 .client-form .field textarea {
   min-height: 100px;
 }
+.client-form .form-grid > .field {
+  grid-column: 1/-1;
+}
+.client-form .form-grid > .field + .field {
+  padding-left: 16px;
+  border-left: 2px solid var(--line);
+}
 .client-form .check-row {
   padding: 12px 0;
   font-weight: 700;
@@ -847,6 +858,9 @@ strong {
   }
   .form-grid {
     grid-template-columns: 1fr;
+  }
+  .client-form .form-grid > .field + .field {
+    margin-top: 0;
   }
   .form-grid > .field:has(textarea),
   .form-grid > .notice,

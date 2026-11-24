@@ -21,6 +21,7 @@ import {
   submitAnamnese,
 } from "../lib/data";
 import { googleProvider } from "../lib/firebase";
+import { missingRequiredAnswer, visibleAnswers } from "../lib/domain";
 import type {
   AdminData,
   AnamneseRequest,
@@ -43,7 +44,7 @@ function submissionHtml(
   template: FormTemplate,
   clientName: string,
 ) {
-  return `<h1>Planetário Estúdio</h1><h2>Anamnese e aceite eletrônico</h2><p><strong>Cliente:</strong> ${escapeHtml(clientName)}<br><strong>Conta Google:</strong> ${escapeHtml(sub.googleEmail)}<br><strong>UID:</strong> ${escapeHtml(sub.googleUid)}<br><strong>Protocolo:</strong> ${escapeHtml(sub.requestId)}<br><strong>Autenticação Google:</strong> ${dateTimeBR(new Date(sub.authTimeSeconds * 1000).toISOString())}<br><strong>Envio:</strong> ${dateTimeBR(sub.signedAt)}</p><hr><h3>Respostas</h3>${template.questions.map((q) => `<p><strong>${escapeHtml(q.label)}</strong><br>${escapeHtml(sub.answers[q.id] || "Sem resposta")}</p>`).join("")}<hr><h3>Termo do procedimento · versão ${template.version}</h3><p>${escapeHtml(template.procedureTerm).replace(/\n/g, "<br>")}</p><p><strong>Aceite explícito:</strong> ${sub.procedureAccepted ? "Sim" : "Não"}</p><h3>Uso de imagem</h3><p>${escapeHtml(template.imageConsentTerm).replace(/\n/g, "<br>")}</p><p><strong>Autorizou:</strong> ${sub.imageUseAccepted ? "Sim" : "Não"}</p><hr><p>Registro associado a uma conta Google autenticada. A adequação jurídica do termo e da forma de aceite deve ser avaliada antes do uso real.</p>`;
+  return `<h1>Planetário Estúdio</h1><h2>Anamnese e aceite eletrônico</h2><p><strong>Cliente:</strong> ${escapeHtml(clientName)}<br><strong>Conta Google:</strong> ${escapeHtml(sub.googleEmail)}<br><strong>UID:</strong> ${escapeHtml(sub.googleUid)}<br><strong>Protocolo:</strong> ${escapeHtml(sub.requestId)}<br><strong>Autenticação Google:</strong> ${dateTimeBR(new Date(sub.authTimeSeconds * 1000).toISOString())}<br><strong>Envio:</strong> ${dateTimeBR(sub.signedAt)}</p><hr><h3>Respostas</h3>${template.questions.map((q) => `<p><strong>${escapeHtml(q.label)}</strong><br>${escapeHtml(sub.answers[q.id] || "Sem resposta")}</p>${q.followUp && sub.answers[q.id] === q.followUp.when ? `<p><strong>${escapeHtml(q.followUp.label)}</strong><br>${escapeHtml(sub.answers[q.followUp.id] || "Sem resposta")}</p>` : ""}`).join("")}<hr><h3>Termo do procedimento · versão ${template.version}</h3><p>${escapeHtml(template.procedureTerm).replace(/\n/g, "<br>")}</p><p><strong>Aceite explícito:</strong> ${sub.procedureAccepted ? "Sim" : "Não"}</p><h3>Uso de imagem</h3><p>${escapeHtml(template.imageConsentTerm).replace(/\n/g, "<br>")}</p><p><strong>Autorizou:</strong> ${sub.imageUseAccepted ? "Sim" : "Não"}</p><hr><p>Registro associado a uma conta Google autenticada. A adequação jurídica do termo e da forma de aceite deve ser avaliada antes do uso real.</p>`;
 }
 
 function TemplateEditor({ data }: { data: AdminData }) {
@@ -52,11 +53,35 @@ function TemplateEditor({ data }: { data: AdminData }) {
   const [term, setTerm] = useState("");
   const [imageTerm, setImageTerm] = useState("");
   const [reviewed, setReviewed] = useState(false);
+  const [sourceId, setSourceId] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const latest = [...data.formTemplates].sort(
     (a, b) => b.version - a.version,
   )[0];
+  const versions = [...data.formTemplates].sort(
+    (a, b) => b.version - a.version,
+  );
+  function loadTemplate(template?: FormTemplate) {
+    setSourceId(template?.id || "");
+    setQuestions(
+      template?.questions.map((q) => ({
+        ...q,
+        ...(q.followUp ? { followUp: { ...q.followUp } } : {}),
+      })) || [],
+    );
+    setTerm(template?.procedureTerm || "");
+    setImageTerm(template?.imageConsentTerm || "");
+    setReviewed(false);
+    setError("");
+  }
+  function changeQuestion(id: string, change: Partial<FormQuestion>) {
+    setQuestions((current) =>
+      current.map((question) =>
+        question.id === id ? { ...question, ...change } : question,
+      ),
+    );
+  }
   async function save(e: FormEvent) {
     e.preventDefault();
     if (!reviewed) {
@@ -65,8 +90,19 @@ function TemplateEditor({ data }: { data: AdminData }) {
       );
       return;
     }
-    if (!questions.length || questions.some((q) => !q.label.trim())) {
+    if (
+      !questions.length ||
+      questions.some(
+        (q) =>
+          !q.label.trim() ||
+          (q.followUp && (!q.followUp.label.trim() || q.type !== "yesno")),
+      )
+    ) {
       setError("Inclua perguntas com rótulos completos.");
+      return;
+    }
+    if (questions.reduce((count, q) => count + (q.followUp ? 2 : 1), 0) > 40) {
+      setError("O modelo aceita até 40 perguntas, incluindo subrespostas.");
       return;
     }
     setBusy(true);
@@ -74,7 +110,15 @@ function TemplateEditor({ data }: { data: AdminData }) {
     try {
       await publishTemplate(
         {
-          questions,
+          questions: questions.map((q) => ({
+            id: q.id,
+            label: q.label.trim(),
+            required: q.required,
+            type: q.type,
+            ...(q.followUp
+              ? { followUp: { ...q.followUp, label: q.followUp.label.trim() } }
+              : {}),
+          })),
           procedureTerm: term.trim(),
           imageConsentTerm: imageTerm.trim(),
         },
@@ -94,11 +138,7 @@ function TemplateEditor({ data }: { data: AdminData }) {
         <Button
           variant="secondary"
           onClick={() => {
-            if (latest) {
-              setQuestions(latest.questions.map((q) => ({ ...q })));
-              setTerm(latest.procedureTerm);
-              setImageTerm(latest.imageConsentTerm);
-            }
+            if (!open) loadTemplate(latest);
             setOpen(!open);
           }}
         >
@@ -120,6 +160,31 @@ function TemplateEditor({ data }: { data: AdminData }) {
       )}
       {open && (
         <form onSubmit={save} className="form-grid">
+          {versions.length > 0 && (
+            <Field label="Editar a partir do modelo publicado">
+              <select
+                value={sourceId}
+                onChange={(e) =>
+                  loadTemplate(
+                    versions.find((version) => version.id === e.target.value),
+                  )
+                }
+              >
+                {versions.map((version) => (
+                  <option key={version.id} value={version.id}>
+                    Versão {version.version} · {dateTimeBR(version.publishedAt)}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          )}
+          {versions.length > 0 && (
+            <p className="full request-meta">
+              As alterações serão publicadas como versão{" "}
+              {(latest?.version || 0) + 1}. As fichas já assinadas permanecem
+              vinculadas ao modelo original.
+            </p>
+          )}
           <div className="full">
             <h3>Perguntas</h3>
             {questions.map((q, index) => (
@@ -129,13 +194,7 @@ function TemplateEditor({ data }: { data: AdminData }) {
                     required
                     value={q.label}
                     onChange={(e) =>
-                      setQuestions(
-                        questions.map((item) =>
-                          item.id === q.id
-                            ? { ...item, label: e.target.value }
-                            : item,
-                        ),
-                      )
+                      changeQuestion(q.id, { label: e.target.value })
                     }
                   />
                 </Field>
@@ -143,16 +202,12 @@ function TemplateEditor({ data }: { data: AdminData }) {
                   <select
                     value={q.type}
                     onChange={(e) =>
-                      setQuestions(
-                        questions.map((item) =>
-                          item.id === q.id
-                            ? {
-                                ...item,
-                                type: e.target.value as FormQuestion["type"],
-                              }
-                            : item,
-                        ),
-                      )
+                      changeQuestion(q.id, {
+                        type: e.target.value as FormQuestion["type"],
+                        ...(e.target.value === "text"
+                          ? { followUp: undefined }
+                          : {}),
+                      })
                     }
                   >
                     <option value="yesno">Sim / não</option>
@@ -164,13 +219,7 @@ function TemplateEditor({ data }: { data: AdminData }) {
                     type="checkbox"
                     checked={q.required}
                     onChange={(e) =>
-                      setQuestions(
-                        questions.map((item) =>
-                          item.id === q.id
-                            ? { ...item, required: e.target.checked }
-                            : item,
-                        ),
-                      )
+                      changeQuestion(q.id, { required: e.target.checked })
                     }
                   />
                 </Field>
@@ -183,6 +232,90 @@ function TemplateEditor({ data }: { data: AdminData }) {
                 >
                   Remover
                 </Button>
+                {q.type === "yesno" && (
+                  <label className="check-row full">
+                    <input
+                      type="checkbox"
+                      checked={!!q.followUp}
+                      onChange={(e) =>
+                        changeQuestion(q.id, {
+                          followUp: e.target.checked
+                            ? {
+                                id: crypto.randomUUID(),
+                                when: "Sim",
+                                label: "",
+                                required: true,
+                                type: "text",
+                              }
+                            : undefined,
+                        })
+                      }
+                    />
+                    Subresposta condicional
+                  </label>
+                )}
+                {q.followUp && (
+                  <div className="full form-grid">
+                    <Field label="Se responder">
+                      <select
+                        value={q.followUp.when}
+                        onChange={(e) =>
+                          changeQuestion(q.id, {
+                            followUp: {
+                              ...q.followUp!,
+                              when: e.target.value as "Sim" | "Não",
+                            },
+                          })
+                        }
+                      >
+                        <option value="Sim">Sim</option>
+                        <option value="Não">Não</option>
+                      </select>
+                    </Field>
+                    <Field label="Perguntar">
+                      <input
+                        required
+                        value={q.followUp.label}
+                        onChange={(e) =>
+                          changeQuestion(q.id, {
+                            followUp: { ...q.followUp!, label: e.target.value },
+                          })
+                        }
+                      />
+                    </Field>
+                    <Field label="Tipo da subresposta">
+                      <select
+                        value={q.followUp.type}
+                        onChange={(e) =>
+                          changeQuestion(q.id, {
+                            followUp: {
+                              ...q.followUp!,
+                              type: e.target.value as FormQuestion["type"],
+                            },
+                          })
+                        }
+                      >
+                        <option value="text">Texto</option>
+                        <option value="yesno">Sim / não</option>
+                      </select>
+                    </Field>
+                    <label className="check-row">
+                      <input
+                        type="checkbox"
+                        checked={q.followUp.required}
+                        onChange={(e) =>
+                          changeQuestion(q.id, {
+                            followUp: {
+                              ...q.followUp!,
+                              required: e.target.checked,
+                            },
+                          })
+                        }
+                      />
+                      Subresposta obrigatória
+                    </label>
+                  </div>
+                )}
               </div>
             ))}
             <Button
@@ -634,8 +767,10 @@ export function ClientAnamnesePage({
                           ?.name || "Projeto"}
                       </strong>
                       <span>
-                        Versão {template?.version || "—"} · prazo{" "}
-                        {dateTimeBR(r.expiresAt)}
+                        {template
+                          ? `Atualizada em ${dateTimeBR(template.publishedAt)}`
+                          : "Modelo indisponível"}{" "}
+                        · prazo {dateTimeBR(r.expiresAt)}
                       </span>
                     </div>
                     <Badge>
@@ -774,7 +909,7 @@ export function PublicAnamnese({
   async function submit(e: FormEvent) {
     e.preventDefault();
     if (!request || !template || !procedureAccepted) return;
-    if (template.questions.some((q) => q.required && !answers[q.id]?.trim())) {
+    if (missingRequiredAnswer(template.questions, answers)) {
       setError("Responda às perguntas obrigatórias.");
       return;
     }
@@ -784,7 +919,13 @@ export function PublicAnamnese({
       const result = await reauthenticateWithPopup(user, googleProvider);
       if (result.user.uid !== user.uid)
         throw new Error("A conta usada na confirmação é diferente.");
-      await submitAnamnese(user, request, template, answers, imageUseAccepted);
+      await submitAnamnese(
+        user,
+        request,
+        template,
+        visibleAnswers(template.questions, answers),
+        imageUseAccepted,
+      );
       setSubmission(
         await getRecord<AnamneseSubmission>("anamneseSubmissions", requestId),
       );
@@ -860,7 +1001,9 @@ export function PublicAnamnese({
     );
   return (
     <div className="client-form">
-      <span className="eyebrow">ANAMNESE · VERSÃO {template.version}</span>
+      <span className="eyebrow">
+        ANAMNESE · ATUALIZADA EM {dateTimeBR(template.publishedAt)}
+      </span>
       <h1>Sua ficha de atendimento</h1>
       <p>
         Você está usando a conta <strong>{user.email}</strong>. Responda com
@@ -869,33 +1012,72 @@ export function PublicAnamnese({
       <form onSubmit={submit}>
         <Section title="Perguntas">
           {template.questions.map((q, i) => (
-            <Field
-              key={q.id}
-              label={`${i + 1}. ${q.label}${q.required ? " *" : ""}`}
-            >
-              {q.type === "yesno" ? (
-                <select
-                  required={q.required}
-                  value={answers[q.id] || ""}
-                  onChange={(e) =>
-                    setAnswers({ ...answers, [q.id]: e.target.value })
-                  }
+            <div key={q.id} className="form-grid">
+              <Field label={`${i + 1}. ${q.label}${q.required ? " *" : ""}`}>
+                {q.type === "yesno" ? (
+                  <select
+                    required={q.required}
+                    value={answers[q.id] || ""}
+                    onChange={(e) =>
+                      setAnswers((current) => ({
+                        ...current,
+                        [q.id]: e.target.value,
+                      }))
+                    }
+                  >
+                    <option value="">Selecione</option>
+                    <option value="Sim">Sim</option>
+                    <option value="Não">Não</option>
+                  </select>
+                ) : (
+                  <textarea
+                    required={q.required}
+                    maxLength={2000}
+                    value={answers[q.id] || ""}
+                    onChange={(e) =>
+                      setAnswers((current) => ({
+                        ...current,
+                        [q.id]: e.target.value,
+                      }))
+                    }
+                  />
+                )}
+              </Field>
+              {q.followUp && answers[q.id] === q.followUp.when && (
+                <Field
+                  label={`${q.followUp.label}${q.followUp.required ? " *" : ""}`}
                 >
-                  <option value="">Selecione</option>
-                  <option value="Sim">Sim</option>
-                  <option value="Não">Não</option>
-                </select>
-              ) : (
-                <textarea
-                  required={q.required}
-                  maxLength={2000}
-                  value={answers[q.id] || ""}
-                  onChange={(e) =>
-                    setAnswers({ ...answers, [q.id]: e.target.value })
-                  }
-                />
+                  {q.followUp.type === "yesno" ? (
+                    <select
+                      required={q.followUp.required}
+                      value={answers[q.followUp.id] || ""}
+                      onChange={(e) =>
+                        setAnswers((current) => ({
+                          ...current,
+                          [q.followUp!.id]: e.target.value,
+                        }))
+                      }
+                    >
+                      <option value="">Selecione</option>
+                      <option value="Sim">Sim</option>
+                      <option value="Não">Não</option>
+                    </select>
+                  ) : (
+                    <textarea
+                      required={q.followUp.required}
+                      maxLength={2000}
+                      value={answers[q.followUp.id] || ""}
+                      onChange={(e) =>
+                        setAnswers((current) => ({
+                          ...current,
+                          [q.followUp!.id]: e.target.value,
+                        }))
+                      }
+                    />
+                  )}
+                </Field>
               )}
-            </Field>
+            </div>
           ))}
         </Section>
         <Section title="Termo do procedimento">
