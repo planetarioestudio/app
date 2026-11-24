@@ -210,6 +210,68 @@ describe("isolamento do estúdio e anamnese", () => {
     await assertSucceeds(setDoc(ref, model));
     await assertFails(setDoc(ref, { ...model, procedureTerm: "Alterado" }));
   });
+  it("permite publicar e responder mais de 40 perguntas", async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      const db = ctx.firestore();
+      await setDoc(doc(db, "settings", "owner"), {
+        uid: "owner-uid",
+        email: "planetariomkt@gmail.com",
+      });
+      await setDoc(doc(db, "clientAccess", "a-uid"), {
+        clientId: "cliente-a",
+        active: true,
+        verifiedGoogleEmail: "a@gmail.com",
+      });
+    });
+    const owner = env.authenticatedContext("owner-uid", ownerToken).firestore();
+    const client = env
+      .authenticatedContext("a-uid", clientToken("a@gmail.com"))
+      .firestore();
+    const ids = Array.from({ length: 41 }, (_, index) => `q${index + 1}`);
+    await assertSucceeds(
+      setDoc(doc(owner, "formTemplates", "longa"), {
+        version: 3,
+        questions: ids.map((id) => ({
+          id,
+          label: `Pergunta ${id}?`,
+          type: "yesno",
+          required: true,
+        })),
+        questionIds: ids,
+        requiredQuestionIds: ids,
+        procedureTerm: "Termo",
+        imageConsentTerm: "Imagem",
+        publishedAt: serverTimestamp(),
+      }),
+    );
+    await assertSucceeds(
+      setDoc(doc(owner, "anamneseRequests", "longa"), {
+        clientId: "cliente-a",
+        projectId: "p1",
+        assignedUid: "a-uid",
+        templateId: "longa",
+        status: "enviada",
+        expiresAt: Timestamp.fromDate(new Date(Date.now() + 86400000)),
+      }),
+    );
+    await assertSucceeds(
+      setDoc(doc(client, "anamneseSubmissions", "longa"), {
+        clientId: "cliente-a",
+        projectId: "p1",
+        requestId: "longa",
+        googleUid: "a-uid",
+        googleEmail: "a@gmail.com",
+        templateId: "longa",
+        version: 3,
+        answers: Object.fromEntries(ids.map((id) => [id, "Não"])),
+        procedureAccepted: true,
+        imageUseAccepted: false,
+        authMethod: "google.com",
+        authTimeSeconds,
+        signedAt: serverTimestamp(),
+      }),
+    );
+  });
   it("nega leitura depois de revogar o vínculo", async () => {
     await env.withSecurityRulesDisabled(async (ctx) => {
       const db = ctx.firestore();

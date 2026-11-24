@@ -101,10 +101,6 @@ function TemplateEditor({ data }: { data: AdminData }) {
       setError("Inclua perguntas com rótulos completos.");
       return;
     }
-    if (questions.reduce((count, q) => count + (q.followUp ? 2 : 1), 0) > 40) {
-      setError("O modelo aceita até 40 perguntas, incluindo subrespostas.");
-      return;
-    }
     setBusy(true);
     setError("");
     try {

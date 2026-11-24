@@ -84,11 +84,9 @@ service cloud.firestore {
       allow create: if owner()
         && request.resource.data.questions is list
         && request.resource.data.questions.size() > 0
-        && request.resource.data.questions.size() <= 40
         && request.resource.data.questionIds is list
         && request.resource.data.requiredQuestionIds is list
         && request.resource.data.questionIds.size() >= request.resource.data.questions.size()
-        && request.resource.data.questionIds.size() <= 40
         && request.resource.data.requiredQuestionIds.size() <= request.resource.data.questionIds.size()
         && request.resource.data.procedureTerm is string
         && request.resource.data.procedureTerm.size() <= 30000
@@ -133,7 +131,6 @@ service cloud.firestore {
         && get(requestPath(id)).data.status == 'enviada'
         && get(requestPath(id)).data.expiresAt > request.time
         && request.resource.data.answers is map
-        && request.resource.data.answers.keys().size() <= 40
         && request.resource.data.answers.keys().hasOnly(get(/databases/$(database)/documents/formTemplates/$(request.resource.data.templateId)).data.questionIds)
         && request.resource.data.answers.keys().hasAll(get(/databases/$(database)/documents/formTemplates/$(request.resource.data.templateId)).data.requiredQuestionIds)
         && request.resource.data.procedureAccepted == true
