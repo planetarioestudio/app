@@ -225,7 +225,9 @@ function TemplateEditor({ data }: { data: AdminData }) {
               checked={reviewed}
               onChange={(e) => setReviewed(e.target.checked)}
             />{" "}
-            Confirmei que perguntas e termos foram revisados para uso real.
+            Revisei este texto e estas perguntas. Para testes, usarei apenas
+            dados fictícios; antes de atender clientes reais, validarei o
+            conteúdo jurídico e sanitário.
           </label>
           {error && <p className="notice error">{error}</p>}
           <FormActions
