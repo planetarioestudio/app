@@ -241,7 +241,10 @@ export async function editRecord(
               emailLower: newEmail,
               clientId: id,
               status: "unique",
-              claimedUid: "",
+              claimedUid:
+                previous?.exists() && previous.data().clientId === id
+                  ? previous.data().claimedUid || ""
+                  : "",
             });
         }
       }
@@ -316,11 +319,16 @@ export async function linkClient(
   ownerUid: string,
 ) {
   const db = requireDb();
-  const indexRef = doc(db, "clientEmailIndex", await emailIndexId(email));
+  const client = await getDoc(doc(db, "clients", clientId));
+  if (!client.exists()) throw new Error("Cliente não encontrado.");
+  const clientEmail = normalizeEmail(client.data().email || "");
+  const indexRef = clientEmail
+    ? doc(db, "clientEmailIndex", await emailIndexId(clientEmail))
+    : null;
   await runTransaction(db, async (tx) => {
-    const index = await tx.get(indexRef);
+    const index = indexRef ? await tx.get(indexRef) : null;
     if (
-      index.exists() &&
+      index?.exists() &&
       index.data().status === "unique" &&
       index.data().clientId === clientId
     ) {
@@ -329,7 +337,7 @@ export async function linkClient(
         throw new Error(
           "Este cadastro já está vinculado a outra conta Google.",
         );
-      tx.update(indexRef, { claimedUid: uid });
+      tx.update(indexRef!, { claimedUid: uid });
     }
     tx.set(doc(db, "clientAccess", uid), {
       clientId,
