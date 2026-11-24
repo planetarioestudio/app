@@ -5,7 +5,14 @@ import {
   signOut,
   type User,
 } from "firebase/auth";
-import { auth, configured, googleProvider, ownerEmail } from "./lib/firebase";
+import { doc, onSnapshot } from "firebase/firestore";
+import {
+  auth,
+  configured,
+  googleProvider,
+  ownerEmail,
+  requireDb,
+} from "./lib/firebase";
 import {
   emptyAdminData,
   getAccess,
@@ -28,6 +35,7 @@ import { QuotesPage, QuoteDetail } from "./pages/Quotes";
 import { FinancePage } from "./pages/Finance";
 import { StockPage } from "./pages/Stock";
 import { SettingsPage } from "./pages/Settings";
+import { ClientPortalPage, RegistrationPage } from "./pages/ClientPortal";
 
 const nav = [
   ["/", "Visão geral"],
@@ -107,6 +115,19 @@ export default function App() {
       (e) => setError(errorMessage(e)),
     );
   }, [role]);
+  useEffect(() => {
+    if (role !== "client" || !user) return;
+    return onSnapshot(
+      doc(requireDb(), "clientAccess", user.uid),
+      (snap) =>
+        setAccess(
+          snap.exists()
+            ? ({ id: snap.id, ...snap.data() } as ClientAccess)
+            : null,
+        ),
+      (err) => setError(errorMessage(err)),
+    );
+  }, [role, user]);
 
   async function login() {
     if (!auth) return;
@@ -164,8 +185,8 @@ export default function App() {
           <span className="eyebrow">BEM-VINDO</span>
           <h1>Entre com sua conta Google</h1>
           <p>
-            O painel é privado. Clientes entram para responder à anamnese
-            enviada pelo estúdio.
+            Entre para administrar o estúdio ou fazer seu cadastro de cliente,
+            responder à anamnese e acompanhar seus projetos.
           </p>
           <Button onClick={login} disabled={busy}>
             {busy ? "Entrando…" : "Continuar com Google"}
@@ -184,7 +205,7 @@ export default function App() {
     return (
       <div className="client-shell">
         <header>
-          <a href="#/" className="brand">
+          <a href="#/cliente" className="brand">
             <span className="brand-symbol">✳</span>
             <span>
               Planetário <b>Estúdio</b>
@@ -206,7 +227,20 @@ export default function App() {
               {error}
             </p>
           )}
-          {route.startsWith("/anamnese/") ? (
+          {access && !access.active ? (
+            <div className="client-welcome">
+              <h1>Acesso revogado</h1>
+              <p>
+                Entre em contato com o estúdio para esclarecer seu cadastro.
+              </p>
+            </div>
+          ) : !access ? (
+            <RegistrationPage
+              user={user}
+              onRegistered={setAccess}
+              returnTo={route.startsWith("/anamnese/") ? route : undefined}
+            />
+          ) : route.startsWith("/anamnese/") ? (
             <PublicAnamnese
               requestId={route.split("/")[2] || ""}
               user={user}
@@ -214,22 +248,7 @@ export default function App() {
               onAccessChange={setAccess}
             />
           ) : (
-            <div className="client-welcome">
-              <span className="eyebrow">ÁREA DO CLIENTE</span>
-              <h1>Olá, {user.displayName || "bem-vindo"}.</h1>
-              {access?.active ? (
-                <p>
-                  Sua conta está vinculada ao estúdio. Abra o link da anamnese
-                  que você recebeu para responder.
-                </p>
-              ) : (
-                <p>
-                  Seu acesso está pendente de confirmação pelo estúdio. Informe
-                  a conta <strong>{user.email}</strong> para que possamos
-                  vincular seu cadastro.
-                </p>
-              )}
-            </div>
+            <ClientPortalPage user={user} access={access} route={route} />
           )}
         </main>
       </div>

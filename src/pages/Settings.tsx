@@ -4,6 +4,8 @@ import { Button, PageTitle, Section } from "../components";
 import type { AdminData } from "../lib/types";
 import { requireDb } from "../lib/firebase";
 import { download } from "../lib/utils";
+import { normalizeEmail, preparePortal } from "../lib/portal";
+import { errorMessage } from "../lib/utils";
 
 export function SettingsPage({
   data,
@@ -17,6 +19,29 @@ export function SettingsPage({
   setTheme: (theme: string) => void;
 }) {
   const [exported, setExported] = useState(false);
+  const [preparing, setPreparing] = useState(false);
+  const [portalReport, setPortalReport] = useState("");
+  const [portalError, setPortalError] = useState("");
+  const emails = data.clients
+    .map((client) => normalizeEmail(client.email || ""))
+    .filter(Boolean);
+  const duplicateEmails = new Set(
+    emails.filter((email, index) => emails.indexOf(email) !== index),
+  );
+  async function activatePortal() {
+    setPreparing(true);
+    setPortalError("");
+    try {
+      const result = await preparePortal(data);
+      setPortalReport(
+        `${result.clients} clientes, ${result.projects} projetos e ${result.payments} pagamentos preparados. ${result.ambiguousEmails} e-mails duplicados precisam de conciliação manual.`,
+      );
+    } catch (err) {
+      setPortalError(errorMessage(err));
+    } finally {
+      setPreparing(false);
+    }
+  }
   function exportData() {
     const payload = {
       format: "planetario-backup-v1",
@@ -91,6 +116,52 @@ export function SettingsPage({
           ensaiada em um projeto Firebase isolado antes de atender clientes
           reais. O procedimento está no README.
         </p>
+      </Section>
+      <Section title="Ativar cadastro e área do cliente">
+        <p>
+          Antes de compartilhar o link único, confira os cadastros existentes e
+          baixe o backup acima. A preparação cria uma visão segura de projetos e
+          pagamentos para cada cliente.
+        </p>
+        <p>
+          {data.clients.length} clientes ·{" "}
+          {
+            data.clients.filter((client) => !normalizeEmail(client.email || ""))
+              .length
+          }{" "}
+          sem e-mail · {duplicateEmails.size} e-mails duplicados.
+        </p>
+        {duplicateEmails.size > 0 && (
+          <p className="notice warning">
+            E-mails duplicados: {[...duplicateEmails].join(", ")}. Eles não
+            serão associados automaticamente.
+          </p>
+        )}
+        {data.clients.filter((client) => !normalizeEmail(client.email || ""))
+          .length > 0 && (
+          <p className="notice warning">
+            Cadastros sem e-mail:{" "}
+            {data.clients
+              .filter((client) => !normalizeEmail(client.email || ""))
+              .map((client) => client.name)
+              .join(", ")}
+            .
+          </p>
+        )}
+        <Button onClick={activatePortal} disabled={!exported || preparing}>
+          {preparing ? "Preparando…" : "Preparar e ativar portal"}
+        </Button>
+        {!exported && (
+          <p className="request-meta">
+            Baixe o backup JSON nesta sessão para liberar a preparação.
+          </p>
+        )}
+        {portalReport && <p className="notice success">{portalReport}</p>}
+        {portalError && (
+          <p className="notice error" role="alert">
+            {portalError}
+          </p>
+        )}
       </Section>
       <Section title="Sobre o aplicativo">
         <p>

@@ -12,6 +12,7 @@ import {
 import {
   createAnamneseRequest,
   createFixedRecord,
+  createInitialAnamneseRequest,
   editRecord,
   getAccess,
   getRecord,
@@ -437,6 +438,22 @@ export function AnamnesesPage({
         menores e regras sanitárias locais. Login Google registra um aceite
         eletrônico, sem comprovar identidade civil por si só.
       </div>
+      <Section title="Link único de cadastro">
+        <p>
+          Compartilhe este link para a pessoa criar seu cadastro, preencher a
+          anamnese inicial e acompanhar seus projetos.
+        </p>
+        <Button
+          variant="secondary"
+          onClick={() =>
+            navigator.clipboard.writeText(
+              `${location.href.split("#")[0]}#/cadastro`,
+            )
+          }
+        >
+          Copiar link de cadastro
+        </Button>
+      </Section>
       <TemplateEditor data={data} />
       <div className="two-col">
         <Section title="Contas aguardando vínculo">
@@ -570,7 +587,11 @@ export function AnamnesesPage({
                     {data.clients.find((c) => c.id === r.clientId)?.name ||
                       "Cliente"}
                   </strong>
-                  <span>Prazo {dateBR(r.expiresAt)}</span>
+                  <span>
+                    {r.kind === "initial"
+                      ? "Cadastro inicial · sem prazo"
+                      : `Prazo ${dateBR(r.expiresAt)}`}
+                  </span>
                 </div>
                 <Badge>
                   {data.anamneseSubmissions.some((s) => s.id === r.id)
@@ -599,6 +620,7 @@ export function ClientAnamnesePage({
 }) {
   const client = data.clients.find((c) => c.id === clientId);
   const [projectId, setProjectId] = useState("");
+  const [kind, setKind] = useState<"project" | "initial">("project");
   const [expiresAt, setExpiresAt] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -612,7 +634,9 @@ export function ClientAnamnesePage({
   )[0];
   const requests = data.anamneseRequests
     .filter((r) => r.clientId === clientId)
-    .sort((a, b) => b.expiresAt.toMillis() - a.expiresAt.toMillis());
+    .sort(
+      (a, b) => (b.expiresAt?.toMillis() || 0) - (a.expiresAt?.toMillis() || 0),
+    );
   async function create(e: FormEvent) {
     e.preventDefault();
     if (!access || !latest) {
@@ -622,13 +646,16 @@ export function ClientAnamnesePage({
     setBusy(true);
     setError("");
     try {
-      const ref = await createAnamneseRequest({
-        clientId,
-        projectId,
-        assignedUid: access.id,
-        templateId: latest.id,
-        expiresAt: toIso(`${expiresAt}T23:59`),
-      });
+      const ref =
+        kind === "initial"
+          ? await createInitialAnamneseRequest(clientId, access.id, latest.id)
+          : await createAnamneseRequest({
+              clientId,
+              projectId,
+              assignedUid: access.id,
+              templateId: latest.id,
+              expiresAt: toIso(`${expiresAt}T23:59`),
+            });
       setCopied(ref.id);
     } catch (err) {
       setError(errorMessage(err));
@@ -691,30 +718,45 @@ export function ClientAnamnesePage({
             </p>
           )}
           <form className="form-grid" onSubmit={create}>
-            <Field label="Projeto *">
+            <Field label="Tipo de solicitação">
               <select
-                required
-                value={projectId}
-                onChange={(e) => setProjectId(e.target.value)}
+                value={kind}
+                onChange={(e) =>
+                  setKind(e.target.value as "project" | "initial")
+                }
               >
-                <option value="">Selecione</option>
-                {data.projects
-                  .filter((p) => p.clientId === clientId)
-                  .map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name}
-                    </option>
-                  ))}
+                <option value="project">Para um projeto</option>
+                <option value="initial">Inicial, sem projeto</option>
               </select>
             </Field>
-            <Field label="Válida até *">
-              <input
-                required
-                type="date"
-                value={expiresAt}
-                onChange={(e) => setExpiresAt(e.target.value)}
-              />
-            </Field>
+            {kind === "project" && (
+              <Field label="Projeto *">
+                <select
+                  required
+                  value={projectId}
+                  onChange={(e) => setProjectId(e.target.value)}
+                >
+                  <option value="">Selecione</option>
+                  {data.projects
+                    .filter((p) => p.clientId === clientId)
+                    .map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name}
+                      </option>
+                    ))}
+                </select>
+              </Field>
+            )}
+            {kind === "project" && (
+              <Field label="Válida até *">
+                <input
+                  required
+                  type="date"
+                  value={expiresAt}
+                  onChange={(e) => setExpiresAt(e.target.value)}
+                />
+              </Field>
+            )}
             <Button type="submit" disabled={busy || !access || !latest}>
               Criar link
             </Button>
@@ -762,14 +804,18 @@ export function ClientAnamnesePage({
                   <div className="list-row">
                     <div>
                       <strong>
-                        {data.projects.find((p) => p.id === r.projectId)
-                          ?.name || "Projeto"}
+                        {r.kind === "initial"
+                          ? "Cadastro inicial"
+                          : data.projects.find((p) => p.id === r.projectId)
+                              ?.name || "Projeto"}
                       </strong>
                       <span>
                         {template
                           ? `Atualizada em ${dateTimeBR(template.publishedAt)}`
                           : "Modelo indisponível"}{" "}
-                        · prazo {dateTimeBR(r.expiresAt)}
+                        {r.expiresAt
+                          ? ` · prazo ${dateTimeBR(r.expiresAt)}`
+                          : ""}
                       </span>
                     </div>
                     <Badge>
@@ -986,11 +1032,14 @@ export function PublicAnamnese({
         >
           Imprimir minha cópia
         </Button>
+        <p>
+          <a href="#/cliente">Voltar à área do cliente →</a>
+        </p>
       </div>
     );
   if (
     request.status === "revogada" ||
-    request.expiresAt.toMillis() < Date.now()
+    (request.expiresAt && request.expiresAt.toMillis() < Date.now())
   )
     return (
       <div className="client-welcome">

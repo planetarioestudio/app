@@ -18,6 +18,15 @@ service cloud.firestore {
     function accessPath() {
       return /databases/$(database)/documents/clientAccess/$(request.auth.uid);
     }
+    function emailIndexPath() {
+      return /databases/$(database)/documents/clientEmailIndex/$(hashing.sha256(request.auth.token.email.lower().toUtf8()).toHexString().lower());
+    }
+    function clientPath(clientId) {
+      return /databases/$(database)/documents/clients/$(clientId);
+    }
+    function portalPath(clientId) {
+      return /databases/$(database)/documents/clientPortal/$(clientId);
+    }
     function linked() {
       return googleUser() && exists(accessPath())
         && get(accessPath()).data.active == true
@@ -47,7 +56,121 @@ service cloud.firestore {
     }
     match /settings/app { allow read, write: if owner(); }
 
-    match /clients/{id} { allow read, write: if owner(); }
+    match /portalSettings/current {
+      allow get: if googleUser();
+      allow list: if false;
+      allow create, update, delete: if owner();
+    }
+    match /clientEmailIndex/{id} {
+      allow get: if owner() || (googleUser()
+        && id == hashing.sha256(request.auth.token.email.lower().toUtf8()).toHexString().lower());
+      allow list: if owner();
+      allow create: if owner() || (googleUser()
+        && id == hashing.sha256(request.auth.token.email.lower().toUtf8()).toHexString().lower()
+        && request.resource.data.keys().hasOnly(['emailLower', 'clientId', 'status', 'claimedUid'])
+        && request.resource.data.emailLower == request.auth.token.email.lower()
+        && request.resource.data.clientId == request.auth.uid
+        && request.resource.data.status == 'unique'
+        && request.resource.data.claimedUid == request.auth.uid
+        && getAfter(accessPath()).data.clientId == request.auth.uid);
+      allow update: if owner() || (googleUser()
+        && id == hashing.sha256(request.auth.token.email.lower().toUtf8()).toHexString().lower()
+        && resource.data.emailLower == request.auth.token.email.lower()
+        && resource.data.status == 'unique'
+        && resource.data.claimedUid == ''
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['claimedUid'])
+        && request.resource.data.claimedUid == request.auth.uid
+        && getAfter(accessPath()).data.clientId == resource.data.clientId);
+      allow delete: if owner();
+    }
+    match /clients/{id} {
+      allow read: if owner();
+      allow create: if owner() || (googleUser() && id == request.auth.uid
+        && !exists(accessPath())
+        && request.resource.data.keys().hasOnly([
+          'name', 'searchName', 'phone', 'email', 'instagram', 'birthDate',
+          'source', 'notes', 'active', 'createdAt', 'updatedAt'
+        ])
+        && request.resource.data.name is string
+        && request.resource.data.name.size() > 0
+        && request.resource.data.birthDate is string
+        && request.resource.data.phone is string
+        && request.resource.data.phone.size() > 0
+        && request.resource.data.email == request.auth.token.email.lower()
+        && request.resource.data.source == 'autocadastro'
+        && request.resource.data.notes == ''
+        && request.resource.data.active == true
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time
+        && getAfter(accessPath()).data.clientId == id);
+      allow update: if owner() || (googleUser()
+        && getAfter(accessPath()).data.active == true
+        && getAfter(accessPath()).data.clientId == id
+        && (
+          (!exists(accessPath())
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+              'name', 'searchName', 'phone', 'email', 'instagram', 'birthDate', 'updatedAt'
+            ])
+            && request.resource.data.email == request.auth.token.email.lower())
+          || (linkedTo(id)
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+              'phone', 'instagram', 'updatedAt'
+            ])
+            && request.resource.data.phone == getAfter(portalPath(id)).data.phone
+            && request.resource.data.instagram == getAfter(portalPath(id)).data.instagram)
+        )
+        && request.resource.data.updatedAt == request.time);
+      allow delete: if owner();
+    }
+    match /clientPortal/{clientId} {
+      allow get: if owner() || linkedTo(clientId);
+      allow list: if owner();
+      allow create: if owner() || (googleUser() && !exists(accessPath())
+        && getAfter(accessPath()).data.active == true
+        && getAfter(accessPath()).data.clientId == clientId
+        && request.resource.data.keys().hasOnly([
+          'name', 'birthDate', 'phone', 'email', 'instagram', 'updatedAt'
+        ])
+        && request.resource.data.email == request.auth.token.email.lower()
+        && request.resource.data.name.size() > 0
+        && request.resource.data.phone.size() > 0
+        && request.resource.data.updatedAt == request.time);
+      allow update: if owner() || (googleUser()
+        && getAfter(accessPath()).data.active == true
+        && getAfter(accessPath()).data.clientId == clientId
+        && request.resource.data.updatedAt == request.time
+        && (
+          (!exists(accessPath())
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+              'name', 'birthDate', 'phone', 'email', 'instagram', 'updatedAt'
+            ])
+            && request.resource.data.email == request.auth.token.email.lower())
+          || (linkedTo(clientId)
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+              'phone', 'instagram', 'updatedAt'
+            ])
+            && request.resource.data.phone == getAfter(clientPath(clientId)).data.phone
+            && request.resource.data.instagram == getAfter(clientPath(clientId)).data.instagram)
+          || (linkedTo(clientId)
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+              'initialSignedAt', 'initialRequestId', 'updatedAt'
+            ])
+            && request.resource.data.initialSignedAt == request.time
+            && getAfter(/databases/$(database)/documents/anamneseSubmissions/$(request.resource.data.initialRequestId)).data.signedAt == request.time
+            && getAfter(requestPath(request.resource.data.initialRequestId)).data.kind == 'initial'
+            && getAfter(requestPath(request.resource.data.initialRequestId)).data.clientId == clientId
+            && getAfter(requestPath(request.resource.data.initialRequestId)).data.assignedUid == request.auth.uid)
+        ));
+      allow delete: if owner();
+      match /projects/{id} {
+        allow read: if owner() || linkedTo(clientId);
+        allow write: if owner();
+      }
+      match /payments/{id} {
+        allow read: if owner() || linkedTo(clientId);
+        allow write: if owner();
+      }
+    }
     match /projects/{id} { allow read, write: if owner(); }
     match /sessions/{id} { allow read, write: if owner(); }
     match /quotes/{id} {
@@ -71,12 +194,34 @@ service cloud.firestore {
         && request.resource.data.uid == uid
         && request.resource.data.verifiedGoogleEmail == request.auth.token.email
         && request.resource.data.requestedAt == request.time;
-      allow update, delete: if owner();
+      allow update: if owner();
+      allow delete: if owner() || (googleUser() && request.auth.uid == uid
+        && getAfter(accessPath()).data.active == true);
     }
     match /clientAccess/{uid} {
       allow get: if owner() || (googleUser() && request.auth.uid == uid);
       allow list: if owner();
-      allow create, update, delete: if owner();
+      allow create: if owner() || (googleUser() && request.auth.uid == uid
+        && exists(/databases/$(database)/documents/portalSettings/current)
+        && get(/databases/$(database)/documents/portalSettings/current).data.enabled == true
+        && request.resource.data.keys().hasOnly([
+          'clientId', 'verifiedGoogleEmail', 'active', 'linkedAt', 'linkedBy'
+        ])
+        && request.resource.data.verifiedGoogleEmail == request.auth.token.email
+        && request.resource.data.active == true
+        && request.resource.data.linkedAt == request.time
+        && request.resource.data.linkedBy == 'self'
+        && (
+          (request.resource.data.clientId == uid
+            && getAfter(clientPath(uid)).data.email == request.auth.token.email.lower()
+            && (!exists(emailIndexPath())
+              || get(emailIndexPath()).data.status != 'unique'
+              || get(emailIndexPath()).data.claimedUid != ''))
+          || (getAfter(emailIndexPath()).data.status == 'unique'
+            && getAfter(emailIndexPath()).data.clientId == request.resource.data.clientId
+            && getAfter(emailIndexPath()).data.claimedUid == uid)
+        ));
+      allow update, delete: if owner();
     }
     match /formTemplates/{id} {
       allow get: if owner() || linked();
@@ -97,10 +242,29 @@ service cloud.firestore {
       allow get: if owner() || (linked()
         && resource.data.assignedUid == request.auth.uid
         && linkedTo(resource.data.clientId));
-      allow list: if owner();
-      allow create: if owner()
-        && request.resource.data.expiresAt is timestamp
-        && request.resource.data.expiresAt > request.time;
+      allow list: if owner() || (linked()
+        && resource.data.assignedUid == request.auth.uid
+        && linkedTo(resource.data.clientId));
+      allow create: if (owner()
+        && ((request.resource.data.get('kind', 'project') == 'initial'
+          && request.resource.data.projectId == ''
+          && request.resource.data.assignedUid is string)
+          || (request.resource.data.expiresAt is timestamp
+            && request.resource.data.expiresAt > request.time)))
+        || (linked() && id == 'initial_' + request.auth.uid
+          && request.resource.data.keys().hasOnly([
+            'kind', 'clientId', 'projectId', 'assignedUid', 'templateId',
+            'status', 'requestedAt'
+          ])
+          && request.resource.data.kind == 'initial'
+          && request.resource.data.clientId == get(accessPath()).data.clientId
+          && request.resource.data.projectId == ''
+          && request.resource.data.assignedUid == request.auth.uid
+          && request.resource.data.templateId == get(/databases/$(database)/documents/portalSettings/current).data.templateId
+          && get(/databases/$(database)/documents/portalSettings/current).data.enabled == true
+          && request.resource.data.status == 'enviada'
+          && request.resource.data.requestedAt == request.time
+          && !('initialSignedAt' in get(portalPath(request.resource.data.clientId)).data));
       allow update: if owner()
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt'])
         && request.resource.data.status == 'revogada';
@@ -129,7 +293,8 @@ service cloud.firestore {
         && request.resource.data.templateId == get(requestPath(id)).data.templateId
         && request.resource.data.version == get(/databases/$(database)/documents/formTemplates/$(request.resource.data.templateId)).data.version
         && get(requestPath(id)).data.status == 'enviada'
-        && get(requestPath(id)).data.expiresAt > request.time
+        && (get(requestPath(id)).data.get('kind', 'project') == 'initial'
+          || get(requestPath(id)).data.expiresAt > request.time)
         && request.resource.data.answers is map
         && request.resource.data.answers.keys().hasOnly(get(/databases/$(database)/documents/formTemplates/$(request.resource.data.templateId)).data.questionIds)
         && request.resource.data.answers.keys().hasAll(get(/databases/$(database)/documents/formTemplates/$(request.resource.data.templateId)).data.requiredQuestionIds)

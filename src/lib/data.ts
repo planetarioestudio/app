@@ -1,6 +1,5 @@
 import { getIdTokenResult, type User } from "firebase/auth";
 import {
-  addDoc,
   collection,
   doc,
   getDoc,
@@ -10,6 +9,7 @@ import {
   setDoc,
   updateDoc,
   Timestamp,
+  writeBatch,
   type DocumentData,
   type Firestore,
   type Unsubscribe,
@@ -17,13 +17,22 @@ import {
 import { requireDb, ownerEmail } from "./firebase";
 import { lotExpired, stockResult } from "./domain";
 import { today } from "./utils";
+import {
+  emailIndexId,
+  normalizeEmail,
+  portalPaymentFields,
+  portalProjectFields,
+} from "./portal";
 import type {
   AdminData,
   AnamneseRequest,
   AnamneseSubmission,
   ClientAccess,
   FormTemplate,
+  Client,
+  Payment,
   Product,
+  Project,
   StockLot,
 } from "./types";
 
@@ -83,8 +92,9 @@ export async function initializeIdentity(
     }
     return "owner";
   }
+  const access = await getDoc(doc(db, "clientAccess", user.uid));
   const pending = doc(db, "pendingAccounts", user.uid);
-  if (!(await getDoc(pending)).exists()) {
+  if (!access.exists() && !(await getDoc(pending)).exists()) {
     await setDoc(pending, {
       uid: user.uid,
       verifiedGoogleEmail: email,
@@ -118,21 +128,168 @@ export function watchAdmin(
 }
 
 export async function createRecord(name: keyof AdminData, data: DocumentData) {
-  return addDoc(collection(requireDb(), name), {
+  const db = requireDb();
+  const ref = doc(collection(db, name));
+  const record = {
     ...data,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
-  });
+  };
+  if (name === "clients") {
+    const client = record as Client;
+    const email = normalizeEmail(client.email || "");
+    const indexRef = email
+      ? doc(db, "clientEmailIndex", await emailIndexId(email))
+      : null;
+    await runTransaction(db, async (tx) => {
+      const index = indexRef ? await tx.get(indexRef) : null;
+      tx.set(ref, record);
+      tx.set(doc(db, "clientPortal", ref.id), {
+        name: client.name,
+        birthDate: client.birthDate,
+        phone: client.phone,
+        email,
+        instagram: client.instagram,
+        updatedAt: serverTimestamp(),
+      });
+      if (indexRef) {
+        if (index?.exists())
+          tx.update(indexRef, { status: "ambiguous", clientId: "" });
+        else
+          tx.set(indexRef, {
+            emailLower: email,
+            clientId: ref.id,
+            status: "unique",
+            claimedUid: "",
+          });
+      }
+    });
+    return ref;
+  }
+  if (name === "projects" || name === "payments") {
+    const batch = writeBatch(db);
+    batch.set(ref, record);
+    if (name === "projects") {
+      const project = record as Project;
+      batch.set(doc(db, "clientPortal", project.clientId, "projects", ref.id), {
+        ...portalProjectFields(project),
+        updatedAt: serverTimestamp(),
+      });
+    } else {
+      const payment = record as Payment;
+      const project = await getDoc(doc(db, "projects", payment.projectId));
+      if (!project.exists()) throw new Error("Projeto não encontrado.");
+      const clientId = project.data().clientId as string;
+      batch.set(doc(db, "clientPortal", clientId, "payments", ref.id), {
+        ...portalPaymentFields(payment, clientId),
+        updatedAt: serverTimestamp(),
+      });
+    }
+    await batch.commit();
+    return ref;
+  }
+  await setDoc(ref, record);
+  return ref;
 }
 export async function editRecord(
   name: keyof AdminData,
   id: string,
   data: DocumentData,
 ) {
-  return updateDoc(doc(requireDb(), name, id), {
-    ...data,
-    updatedAt: serverTimestamp(),
-  });
+  const db = requireDb();
+  const ref = doc(db, name, id);
+  if (name === "clients") {
+    const current = await getDoc(ref);
+    if (!current.exists()) throw new Error("Cliente não encontrado.");
+    const oldEmail = normalizeEmail(current.data().email || "");
+    const next = { ...current.data(), ...data } as Client;
+    const newEmail = normalizeEmail(next.email || "");
+    const oldIndex = oldEmail
+      ? doc(db, "clientEmailIndex", await emailIndexId(oldEmail))
+      : null;
+    const newIndex = newEmail
+      ? doc(db, "clientEmailIndex", await emailIndexId(newEmail))
+      : null;
+    await runTransaction(db, async (tx) => {
+      const [previous, upcoming] = await Promise.all([
+        oldIndex ? tx.get(oldIndex) : Promise.resolve(null),
+        newIndex && newEmail !== oldEmail
+          ? tx.get(newIndex)
+          : Promise.resolve(null),
+      ]);
+      tx.update(ref, { ...data, updatedAt: serverTimestamp() });
+      tx.set(
+        doc(db, "clientPortal", id),
+        {
+          name: next.name,
+          birthDate: next.birthDate,
+          phone: next.phone,
+          email: newEmail,
+          instagram: next.instagram,
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true },
+      );
+      if (newEmail !== oldEmail) {
+        if (oldIndex && previous?.exists() && previous.data().clientId === id)
+          tx.delete(oldIndex);
+        if (newIndex) {
+          if (upcoming?.exists())
+            tx.update(newIndex, { status: "ambiguous", clientId: "" });
+          else
+            tx.set(newIndex, {
+              emailLower: newEmail,
+              clientId: id,
+              status: "unique",
+              claimedUid: "",
+            });
+        }
+      }
+    });
+    return;
+  }
+  if (name === "projects" || name === "payments") {
+    const prior = await getDoc(ref);
+    if (!prior.exists()) throw new Error("Registro não encontrado.");
+    const merged = { ...prior.data(), ...data };
+    const batch = writeBatch(db);
+    batch.update(ref, { ...data, updatedAt: serverTimestamp() });
+    if (name === "projects") {
+      const project = merged as Project;
+      const priorClientId = prior.data().clientId as string;
+      if (priorClientId !== project.clientId)
+        batch.delete(doc(db, "clientPortal", priorClientId, "projects", id));
+      batch.set(doc(db, "clientPortal", project.clientId, "projects", id), {
+        ...portalProjectFields(project),
+        updatedAt: serverTimestamp(),
+      });
+    } else {
+      const payment = merged as Payment;
+      const oldProject = await getDoc(
+        doc(db, "projects", prior.data().projectId as string),
+      );
+      const project = await getDoc(doc(db, "projects", payment.projectId));
+      if (!project.exists()) throw new Error("Projeto não encontrado.");
+      const clientId = project.data().clientId as string;
+      if (oldProject.exists() && oldProject.data().clientId !== clientId)
+        batch.delete(
+          doc(
+            db,
+            "clientPortal",
+            oldProject.data().clientId as string,
+            "payments",
+            id,
+          ),
+        );
+      batch.set(doc(db, "clientPortal", clientId, "payments", id), {
+        ...portalPaymentFields(payment, clientId),
+        updatedAt: serverTimestamp(),
+      });
+    }
+    await batch.commit();
+    return;
+  }
+  return updateDoc(ref, { ...data, updatedAt: serverTimestamp() });
 }
 export async function createFixedRecord(
   name: keyof AdminData,
@@ -158,12 +315,29 @@ export async function linkClient(
   email: string,
   ownerUid: string,
 ) {
-  await setDoc(doc(requireDb(), "clientAccess", uid), {
-    clientId,
-    verifiedGoogleEmail: email,
-    active: true,
-    linkedAt: serverTimestamp(),
-    linkedBy: ownerUid,
+  const db = requireDb();
+  const indexRef = doc(db, "clientEmailIndex", await emailIndexId(email));
+  await runTransaction(db, async (tx) => {
+    const index = await tx.get(indexRef);
+    if (
+      index.exists() &&
+      index.data().status === "unique" &&
+      index.data().clientId === clientId
+    ) {
+      const claimedUid = index.data().claimedUid;
+      if (claimedUid && claimedUid !== uid)
+        throw new Error(
+          "Este cadastro já está vinculado a outra conta Google.",
+        );
+      tx.update(indexRef, { claimedUid: uid });
+    }
+    tx.set(doc(db, "clientAccess", uid), {
+      clientId,
+      verifiedGoogleEmail: email,
+      active: true,
+      linkedAt: serverTimestamp(),
+      linkedBy: ownerUid,
+    });
   });
 }
 export async function revokeClient(uid: string) {
@@ -173,7 +347,10 @@ export async function publishTemplate(
   data: Pick<FormTemplate, "questions" | "procedureTerm" | "imageConsentTerm">,
   version: number,
 ) {
-  return createRecord("formTemplates", {
+  const db = requireDb();
+  const ref = doc(collection(db, "formTemplates"));
+  const batch = writeBatch(db);
+  batch.set(ref, {
     ...data,
     questionIds: data.questions.flatMap((q) =>
       q.followUp ? [q.id, q.followUp.id] : [q.id],
@@ -183,7 +360,19 @@ export async function publishTemplate(
       .map((q) => q.id),
     version,
     publishedAt: serverTimestamp(),
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
   });
+  const settingsRef = doc(db, "portalSettings", "current");
+  const settings = await getDoc(settingsRef);
+  batch.set(settingsRef, {
+    enabled: settings.exists() ? settings.data().enabled === true : false,
+    templateId: ref.id,
+    version,
+    updatedAt: serverTimestamp(),
+  });
+  await batch.commit();
+  return ref;
 }
 export async function createAnamneseRequest(
   data: Pick<
@@ -194,6 +383,21 @@ export async function createAnamneseRequest(
   return createRecord("anamneseRequests", {
     ...data,
     expiresAt: Timestamp.fromDate(new Date(data.expiresAt)),
+    status: "enviada",
+    requestedAt: serverTimestamp(),
+  });
+}
+export async function createInitialAnamneseRequest(
+  clientId: string,
+  assignedUid: string,
+  templateId: string,
+) {
+  return createRecord("anamneseRequests", {
+    kind: "initial",
+    clientId,
+    projectId: "",
+    assignedUid,
+    templateId,
     status: "enviada",
     requestedAt: serverTimestamp(),
   });
@@ -225,7 +429,15 @@ export async function submitAnamnese(
     authTimeSeconds,
     signedAt: serverTimestamp(),
   };
-  await setDoc(ref, payload);
+  const batch = writeBatch(db);
+  batch.set(ref, payload);
+  if (request.kind === "initial")
+    batch.update(doc(db, "clientPortal", request.clientId), {
+      initialSignedAt: serverTimestamp(),
+      initialRequestId: request.id,
+      updatedAt: serverTimestamp(),
+    });
+  await batch.commit();
 }
 
 export async function addProduct(

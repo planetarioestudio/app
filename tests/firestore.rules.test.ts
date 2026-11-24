@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import {
   initializeTestEnvironment,
   assertFails,
@@ -14,6 +15,7 @@ import {
   setDoc,
   serverTimestamp,
   Timestamp,
+  writeBatch,
 } from "firebase/firestore";
 import { recordStock } from "../src/lib/data";
 
@@ -293,6 +295,302 @@ describe("isolamento do estúdio e anamnese", () => {
       .authenticatedContext("a-uid", clientToken("a@gmail.com"))
       .firestore();
     await assertFails(getDoc(doc(a, "anamneseRequests", "r1")));
+  });
+  it("permite autocadastro novo, mas isola o portal e impede vínculo forjado", async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      const db = ctx.firestore();
+      await setDoc(doc(db, "settings", "owner"), {
+        uid: "owner-uid",
+        email: "planetariomkt@gmail.com",
+      });
+      await setDoc(doc(db, "portalSettings", "current"), {
+        enabled: true,
+        templateId: "t1",
+        version: 1,
+      });
+      await setDoc(doc(db, "pendingAccounts", "a-uid"), {
+        uid: "a-uid",
+        verifiedGoogleEmail: "a@gmail.com",
+        requestedAt: Timestamp.now(),
+      });
+    });
+    const a = env
+      .authenticatedContext("a-uid", clientToken("a@gmail.com"))
+      .firestore();
+    const b = env
+      .authenticatedContext("b-uid", clientToken("b@gmail.com"))
+      .firestore();
+    const hash = createHash("sha256").update("a@gmail.com").digest("hex");
+    const batch = writeBatch(a);
+    batch.set(doc(a, "clients", "a-uid"), {
+      name: "Cliente A",
+      searchName: "cliente a",
+      phone: "11999999999",
+      email: "a@gmail.com",
+      instagram: "",
+      birthDate: "2000-01-01",
+      source: "autocadastro",
+      notes: "",
+      active: true,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+    batch.set(doc(a, "clientPortal", "a-uid"), {
+      name: "Cliente A",
+      phone: "11999999999",
+      email: "a@gmail.com",
+      instagram: "",
+      birthDate: "2000-01-01",
+      updatedAt: serverTimestamp(),
+    });
+    batch.set(doc(a, "clientEmailIndex", hash), {
+      emailLower: "a@gmail.com",
+      clientId: "a-uid",
+      status: "unique",
+      claimedUid: "a-uid",
+    });
+    batch.set(doc(a, "clientAccess", "a-uid"), {
+      clientId: "a-uid",
+      verifiedGoogleEmail: "a@gmail.com",
+      active: true,
+      linkedAt: serverTimestamp(),
+      linkedBy: "self",
+    });
+    await assertSucceeds(batch.commit());
+    await assertSucceeds(getDoc(doc(a, "clientPortal", "a-uid")));
+    await assertFails(getDoc(doc(b, "clientPortal", "a-uid")));
+    await assertFails(getDoc(doc(a, "clients", "a-uid")));
+    await assertFails(
+      setDoc(doc(b, "clientAccess", "b-uid"), {
+        clientId: "a-uid",
+        verifiedGoogleEmail: "b@gmail.com",
+        active: true,
+        linkedAt: serverTimestamp(),
+        linkedBy: "self",
+      }),
+    );
+  });
+  it("associa pelo e-mail Google único, mas bloqueia outro UID e notas internas", async () => {
+    const hash = createHash("sha256").update("a@gmail.com").digest("hex");
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      const db = ctx.firestore();
+      await setDoc(doc(db, "settings", "owner"), {
+        uid: "owner-uid",
+        email: "planetariomkt@gmail.com",
+      });
+      await setDoc(doc(db, "portalSettings", "current"), {
+        enabled: true,
+        templateId: "t1",
+        version: 1,
+      });
+      await setDoc(doc(db, "clients", "old-client"), {
+        name: "Antigo",
+        phone: "",
+        email: "a@gmail.com",
+        instagram: "",
+        birthDate: "",
+        searchName: "antigo",
+        notes: "Nota privada",
+        active: true,
+      });
+      await setDoc(doc(db, "clientPortal", "old-client"), {
+        name: "Antigo",
+        phone: "",
+        email: "a@gmail.com",
+        instagram: "",
+        birthDate: "",
+      });
+      await setDoc(doc(db, "clientEmailIndex", hash), {
+        emailLower: "a@gmail.com",
+        clientId: "old-client",
+        status: "unique",
+        claimedUid: "",
+      });
+    });
+    const a = env
+      .authenticatedContext("a-uid", clientToken("a@gmail.com"))
+      .firestore();
+    const b = env
+      .authenticatedContext("b-uid", clientToken("b@gmail.com"))
+      .firestore();
+    const batch = writeBatch(a);
+    batch.update(doc(a, "clients", "old-client"), {
+      name: "Novo nome",
+      searchName: "novo nome",
+      phone: "11999999999",
+      email: "a@gmail.com",
+      instagram: "",
+      birthDate: "2000-01-01",
+      updatedAt: serverTimestamp(),
+    });
+    batch.update(doc(a, "clientPortal", "old-client"), {
+      name: "Novo nome",
+      phone: "11999999999",
+      email: "a@gmail.com",
+      instagram: "",
+      birthDate: "2000-01-01",
+      updatedAt: serverTimestamp(),
+    });
+    batch.update(doc(a, "clientEmailIndex", hash), { claimedUid: "a-uid" });
+    batch.set(doc(a, "clientAccess", "a-uid"), {
+      clientId: "old-client",
+      verifiedGoogleEmail: "a@gmail.com",
+      active: true,
+      linkedAt: serverTimestamp(),
+      linkedBy: "self",
+    });
+    await assertSucceeds(batch.commit());
+    await assertFails(getDoc(doc(a, "clients", "old-client")));
+    await assertSucceeds(getDoc(doc(a, "clientPortal", "old-client")));
+    await assertFails(getDoc(doc(b, "clientPortal", "old-client")));
+    const contact = writeBatch(a);
+    contact.update(doc(a, "clients", "old-client"), {
+      phone: "11888888888",
+      instagram: "@cliente",
+      updatedAt: serverTimestamp(),
+    });
+    contact.update(doc(a, "clientPortal", "old-client"), {
+      phone: "11888888888",
+      instagram: "@cliente",
+      updatedAt: serverTimestamp(),
+    });
+    await assertSucceeds(contact.commit());
+    await assertFails(
+      setDoc(
+        doc(a, "clientPortal", "old-client"),
+        { notes: "tentar" },
+        { merge: true },
+      ),
+    );
+  });
+  it("assina uma solicitação inicial sem projeto uma única vez", async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      const db = ctx.firestore();
+      await setDoc(doc(db, "settings", "owner"), { uid: "owner-uid" });
+      await setDoc(doc(db, "clientAccess", "a-uid"), {
+        clientId: "client-a",
+        active: true,
+        verifiedGoogleEmail: "a@gmail.com",
+      });
+      await setDoc(doc(db, "clientPortal", "client-a"), {
+        name: "Cliente A",
+        email: "a@gmail.com",
+        phone: "11999999999",
+        birthDate: "2000-01-01",
+        instagram: "",
+      });
+      await setDoc(doc(db, "formTemplates", "t1"), {
+        version: 1,
+        questionIds: ["q1"],
+        requiredQuestionIds: ["q1"],
+      });
+      await setDoc(doc(db, "anamneseRequests", "new-initial"), {
+        kind: "initial",
+        clientId: "client-a",
+        projectId: "",
+        assignedUid: "a-uid",
+        templateId: "t1",
+        status: "enviada",
+      });
+    });
+    const a = env
+      .authenticatedContext("a-uid", clientToken("a@gmail.com"))
+      .firestore();
+    const b = env
+      .authenticatedContext("b-uid", clientToken("b@gmail.com"))
+      .firestore();
+    const batch = writeBatch(a);
+    const submission = doc(a, "anamneseSubmissions", "new-initial");
+    batch.set(submission, {
+      clientId: "client-a",
+      projectId: "",
+      requestId: "new-initial",
+      googleUid: "a-uid",
+      googleEmail: "a@gmail.com",
+      templateId: "t1",
+      version: 1,
+      answers: { q1: "Não" },
+      procedureAccepted: true,
+      imageUseAccepted: false,
+      authMethod: "google.com",
+      authTimeSeconds,
+      signedAt: serverTimestamp(),
+    });
+    batch.update(doc(a, "clientPortal", "client-a"), {
+      initialSignedAt: serverTimestamp(),
+      initialRequestId: "new-initial",
+      updatedAt: serverTimestamp(),
+    });
+    await assertSucceeds(batch.commit());
+    await assertFails(setDoc(submission, { tampered: true }));
+    await assertFails(getDoc(doc(b, "clientPortal", "client-a")));
+  });
+  it("mantém e-mail ambíguo sem associação automática e revogação efetiva", async () => {
+    const hash = createHash("sha256").update("a@gmail.com").digest("hex");
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      const db = ctx.firestore();
+      await setDoc(doc(db, "settings", "owner"), { uid: "owner-uid" });
+      await setDoc(doc(db, "portalSettings", "current"), {
+        enabled: true,
+        templateId: "t1",
+      });
+      await setDoc(doc(db, "clientEmailIndex", hash), {
+        emailLower: "a@gmail.com",
+        clientId: "",
+        status: "ambiguous",
+        claimedUid: "",
+      });
+      await setDoc(doc(db, "clientPortal", "old-a"), { name: "Antigo" });
+      await setDoc(doc(db, "clientPortal", "old-a", "projects", "project-1"), {
+        name: "Privado",
+      });
+    });
+    const a = env
+      .authenticatedContext("a-uid", clientToken("a@gmail.com"))
+      .firestore();
+    const batch = writeBatch(a);
+    batch.set(doc(a, "clients", "a-uid"), {
+      name: "Novo",
+      searchName: "novo",
+      phone: "11999999999",
+      email: "a@gmail.com",
+      instagram: "",
+      birthDate: "2000-01-01",
+      source: "autocadastro",
+      notes: "",
+      active: true,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+    batch.set(doc(a, "clientPortal", "a-uid"), {
+      name: "Novo",
+      phone: "11999999999",
+      email: "a@gmail.com",
+      instagram: "",
+      birthDate: "2000-01-01",
+      updatedAt: serverTimestamp(),
+    });
+    batch.set(doc(a, "clientAccess", "a-uid"), {
+      clientId: "a-uid",
+      verifiedGoogleEmail: "a@gmail.com",
+      active: true,
+      linkedAt: serverTimestamp(),
+      linkedBy: "self",
+    });
+    await assertSucceeds(batch.commit());
+    await assertFails(getDoc(doc(a, "clientPortal", "old-a")));
+    await assertFails(
+      getDoc(doc(a, "clientPortal", "old-a", "projects", "project-1")),
+    );
+    const owner = env.authenticatedContext("owner-uid", ownerToken).firestore();
+    await assertSucceeds(
+      setDoc(
+        doc(owner, "clientAccess", "a-uid"),
+        { active: false },
+        { merge: true },
+      ),
+    );
+    await assertFails(getDoc(doc(a, "clientPortal", "a-uid")));
   });
   it("baixa o estoque uma vez mesmo sob concorrência e repetição", async () => {
     await env.withSecurityRulesDisabled(async (ctx) => {

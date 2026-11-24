@@ -137,9 +137,36 @@ export type AnamneseRequest = RecordBase & {
   projectId: string;
   assignedUid: string;
   templateId: string;
-  expiresAt: Timestamp;
+  kind?: "initial" | "project";
+  expiresAt?: Timestamp;
   status: "criada" | "enviada" | "revogada";
   requestedAt?: unknown;
+};
+export type PortalProfile = RecordBase & {
+  name: string;
+  birthDate: string;
+  phone: string;
+  email: string;
+  instagram: string;
+  initialSignedAt?: unknown;
+};
+export type PortalProject = RecordBase & {
+  clientId: string;
+  name: string;
+  description: string;
+  style: string;
+  bodyArea: string;
+  status: string;
+  priceCents: number;
+};
+export type PortalPayment = RecordBase & {
+  clientId: string;
+  projectId: string;
+  kind: string;
+  signedAmountCents: number;
+  method: string;
+  occurredAt: string;
+  voided: boolean;
 };
 export type AnamneseSubmission = RecordBase & {
   clientId: string;
